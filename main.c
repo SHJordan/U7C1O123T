@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
@@ -160,14 +161,139 @@ void check_alerts(void)
 
 void lcd_init(void)
 {
-    // Esta é uma função esqueleto - na implementação real, você precisaria
-    // usar uma biblioteca para comunicação I2C com o LCD ou implementar o protocolo
-    printf("LCD inicializado\n");
+    // Comandos de inicialização para LCD 16x2 com interface I2C
+    uint8_t lcd_init_cmds[] = {
+        0x33, // Inicialização em modo 8-bits (parte 1)
+        0x32, // Inicialização em modo 8-bits (parte 2)
+        0x28, // Configura para modo 4-bits, 2 linhas, fonte 5x8
+        0x0C, // Display ligado, cursor desligado, sem piscar
+        0x06, // Cursor move para direita, sem deslocamento do display
+        0x01  // Limpa o display
+    };
+
+    // Espera mais de 40ms após ligar para o LCD estabilizar
+    sleep_ms(50);
+
+    // Envia comandos de inicialização
+    printf("Inicializando LCD I2C no endereço 0x%02X...\n", LCD_ADDR);
+
+    for (int i = 0; i < sizeof(lcd_init_cmds); i++)
+    {
+        // Envio de cada comando para o LCD
+        uint8_t buf[4];
+
+        // Primeiro nibble (4 bits mais significativos)
+        buf[0] = 0x00 | (lcd_init_cmds[i] & 0xF0); // EN=0, RS=0, dados
+        buf[1] = 0x04 | (lcd_init_cmds[i] & 0xF0); // EN=1, RS=0, dados
+        buf[2] = 0x00 | (lcd_init_cmds[i] & 0xF0); // EN=0, RS=0, dados
+
+        // Envia o primeiro nibble
+        if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+        {
+            printf("Erro na comunicação I2C (primeiro nibble)\n");
+            return;
+        }
+
+        // Segundo nibble (4 bits menos significativos)
+        buf[0] = 0x00 | ((lcd_init_cmds[i] << 4) & 0xF0); // EN=0, RS=0, dados
+        buf[1] = 0x04 | ((lcd_init_cmds[i] << 4) & 0xF0); // EN=1, RS=0, dados
+        buf[2] = 0x00 | ((lcd_init_cmds[i] << 4) & 0xF0); // EN=0, RS=0, dados
+
+        // Envia o segundo nibble
+        if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+        {
+            printf("Erro na comunicação I2C (segundo nibble)\n");
+            return;
+        }
+
+        // Espera tempo suficiente após cada comando
+        if (lcd_init_cmds[i] == 0x01)
+        {
+            sleep_ms(2); // Comando de limpar display precisa de mais tempo
+        }
+        else
+        {
+            sleep_us(50); // Outros comandos precisam de pelo menos 37us
+        }
+    }
+
+    // Define a backlight como ligada
+    uint8_t backlight_on = 0x08; // Liga o backlight
+    i2c_write_blocking(i2c0, LCD_ADDR, &backlight_on, 1, false);
+
+    printf("LCD inicializado com sucesso!\n");
 }
 
 void lcd_print(const char *message, int row)
 {
-    // Esta é uma função esqueleto - na implementação real, você enviaria
-    // os comandos apropriados via I2C para o LCD
+    uint8_t cursor_pos;
+
+    // Define a posição do cursor baseado na linha (row)
+    // Linha 0: Posição 0x00, Linha 1: Posição 0x40
+    cursor_pos = row == 0 ? 0x80 : 0xC0;
+
+    // Envia comando para posicionar o cursor
+    uint8_t buf[4];
+
+    // Primeiro nibble (4 bits mais significativos) do comando
+    buf[0] = 0x00 | (cursor_pos & 0xF0); // EN=0, RS=0 (comando), dados
+    buf[1] = 0x04 | (cursor_pos & 0xF0); // EN=1, RS=0 (comando), dados
+    buf[2] = 0x00 | (cursor_pos & 0xF0); // EN=0, RS=0 (comando), dados
+
+    if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+    {
+        printf("Erro ao posicionar cursor (primeiro nibble)\n");
+        return;
+    }
+
+    // Segundo nibble (4 bits menos significativos) do comando
+    buf[0] = 0x00 | ((cursor_pos << 4) & 0xF0); // EN=0, RS=0 (comando), dados
+    buf[1] = 0x04 | ((cursor_pos << 4) & 0xF0); // EN=1, RS=0 (comando), dados
+    buf[2] = 0x00 | ((cursor_pos << 4) & 0xF0); // EN=0, RS=0 (comando), dados
+
+    if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+    {
+        printf("Erro ao posicionar cursor (segundo nibble)\n");
+        return;
+    }
+
+    sleep_us(50); // Espera um pouco após enviar o comando
+
+    // Envia os caracteres da mensagem um por um
+    for (int i = 0; i < strlen(message) && i < 16; i++)
+    {
+        uint8_t c = message[i];
+
+        // Primeiro nibble (4 bits mais significativos) do caractere
+        buf[0] = 0x01 | (c & 0xF0); // EN=0, RS=1 (dados), dados
+        buf[1] = 0x05 | (c & 0xF0); // EN=1, RS=1 (dados), dados
+        buf[2] = 0x01 | (c & 0xF0); // EN=0, RS=1 (dados), dados
+
+        if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+        {
+            printf("Erro ao escrever caractere (primeiro nibble)\n");
+            return;
+        }
+
+        // Segundo nibble (4 bits menos significativos) do caractere
+        buf[0] = 0x01 | ((c << 4) & 0xF0); // EN=0, RS=1 (dados), dados
+        buf[1] = 0x05 | ((c << 4) & 0xF0); // EN=1, RS=1 (dados), dados
+        buf[2] = 0x01 | ((c << 4) & 0xF0); // EN=0, RS=1 (dados), dados
+
+        if (i2c_write_blocking(i2c0, LCD_ADDR, buf, 3, false) != 3)
+        {
+            printf("Erro ao escrever caractere (segundo nibble)\n");
+            return;
+        }
+
+        sleep_us(50); // Espera um pouco para o LCD processar
+    }
+
+    // Adiciona o bit de backlight a todas as operações
+    for (int i = 0; i < 3; i++)
+    {
+        buf[i] |= 0x08; // Liga o backlight
+    }
+
     printf("LCD[%d]: %s\n", row, message);
 }
