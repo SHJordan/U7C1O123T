@@ -55,7 +55,9 @@ target_include_directories(U7C1O123T PRIVATE
 
 # Add any user requested libraries
 target_link_libraries(U7C1O123T 
-        
+        hardware_adc
+        hardware_i2c
+        hardware_gpio
         )
 
 pico_add_extra_outputs(U7C1O123T)
